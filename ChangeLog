@@ -1,0 +1,16 @@
+Mon Jul  7 15:19:40 MEST 2003 Version 1.1
+	hm, incorporate Richard Béneyt's patch:
+
+	2003/07/06 - Richard Béneyt (rbeneyt@free.fr) - in sqlda_input_bind(...):
+		Fixed "tuple index out of range" exception occurring sometimes
+		:( after a cursor.execute(stmt). 
+		Needed PyErr_Clear() when PySequence_GetItem(seq, num) failed 
+		at the end of the sequence.
+
+Wed Aug 22 11:00:37 MET DST 2001 Version 1.0 PL 1
+	hm, incorporate Hamish Larsons patch
+	-- correct handling if None passed as argument to connect()
+Mon Mar 29 17:33:00 MET DST 2001 Version 1.0
+	hm, official release
+Thu Apr  6 10:48:22 MET DST 2000 Version 0.1 beta
+	hm, inital release

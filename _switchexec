@@ -1,0 +1,15 @@
+#!/usr/bin/sed -f
+# switch between __EXEC and EXEC in lines following a '/*__*/' comment
+# (C) hm@baltic.de
+:start
+/\/\*__\*\// {
+	n
+	/\([ 	]\)EXEC\([ 	]\)/ {
+		s//\1__EXEC\2/
+		b start
+	}
+	/\([ 	]\)__EXEC\([ 	]\)/ {
+		s//\1EXEC\2/
+		b start
+	}
+}

@@ -1,0 +1,125 @@
+The module implements the Python DB API 2.0, but adds some extensions.
+
+*MODULE LEVEL*
+
+ingmod.debug(turnon = 1)
+	Set debugging information on stderr on.
+
+ingmod.verbose(turnon = 1)
+	Increase verbose level on stderr.
+
+ingmod.Datahandler(class_object)
+	See Section DATA HANDLER below.
+
+ingmod.paramstyle == 'qmark' is supported only.
+
+*CONNECTION LEVEL*
+
+conn.sqlcode
+	Returns an integer object for SQLCA.SQLCODE.
+
+conn.immediate("create table abc ( id integer )")
+	Execute non select statements without creating a cursor object.
+
+*CURSOR LEVEL*
+
+conn = curs.connection()
+	Returns the connection object for the cursor.
+
+cu.ingtypes
+	Returns a sequence of Ingres types for the current cursor.
+
+cu.names
+	Returns a sequence of attribute names for the current cursor.
+
+cu.lens
+	Returns a sequence of attribute lengths for the current cursor.
+
+curs.prefetchrows
+	Set/return an integer for the INGRES prefetch rows.
+
+curs.dbevent
+	Returns a tuple with two strings for the last INGRES DB event name and
+	text respectively.
+
+curs.rowcount
+	Returns the current row count for the last fetch statement or
+	the update count (# of rows effected) for data manipulation
+	statements.
+
+curs.sqlerror
+	An error string.
+
+curs.sqlcode
+	The SQLCA.SQLCODE content.
+
+curs.handler
+	The current DATA HANDLER object.
+
+*DATATYPES*
+
+Time() defaults to 'now'
+Date() defaults to 'today'
+
+*DATA HANDLER*
+
+For handling Large Objects a new data handler object can be used.  It
+must be initialized with a class object, that provides three methods
+get, put and data.
+
+ingmod.Datahandler(class_obj)
+
+Before retrieving such objects You have to register a handler with the
+intended cursor object.  For now, only one handler can be used per
+cursor/statement.  Here is a little example how to use it.
+
+class datahandler:
+	def __init__(self, obj = None):
+		self._str = obj
+		self._size = len(obj)
+		self._pos = 0
+
+	def get(self, string, end):
+		print "datahandler.get:", self, len(string), end
+		if self._str == None:
+			self._str = string
+		else:
+			self._str = self._str + string
+
+	def put(self, maxsize):
+		print "datahandler.put:", self, maxsize
+		if self._pos < self._size:
+			if (self._pos + maxsize) >= self._size:
+				end = self._size
+			else:
+				end = self._pos + maxsize
+			sobj = self._str[self._pos:end]
+			self._pos = end
+			return sobj
+		return None
+	def data(self):
+		return self._str
+
+
+[...]
+
+d = datahandler(a_very_long_string)
+dh = ingmod.Datahandler(d)
+curs.register(dh)
+curs.execute("select blob from descr where docid = 1234")
+t = curs.fetchone()
+print t.data() # same as d.data()
+
+DATA HANDLER don't work with CA Ingres 6.4!
+
+*NOT IMPLEMENTED*
+
+cursor.executemany(operation, sequence)
+sequence = cursor.fetchmany(size = cursor.arraysize)
+sequence = cursor.fetchall()
+
+	Can be easily added on python level.
+
+ret = cursor.nextset()
+cursor.setinputsizes(sizes)
+ret = cursor.setoutputsize(size, column = None)

@@ -1,0 +1,36 @@
+This is an Python Database API 2.0 conforming CA Ingres modul. It is
+totally written in ESQL/C. It was tested with following Ingres
+Versions:
+
+	CA OpenIngres 1.2 on SUN Solaris 2.6
+	CA Ingres II Linux on PC SuSE Linux 6.3
+
+And to some extent with:
+
+	CA Ingres 6.4 on SUN Solaris 2.5
+
+Especially Binary() and DATA HANDLERS don't work with Ingres 6.4.
+
+The module adds some extensions to the API 2.0.  Please read Extensions
+for a detailed description.
+
+Installation: please go thru Makefile and adjust to Your environment.
+Per default, a shared module is build. In ingtest.py, set DB to a
+reasonable value (default DB is "iidbdb"). Data handler don't work with
+Ingres 6.4.  Use :switchexec <ingmod.ec >ingmod64.ec to patch the
+module for use with Ingres 6.4.  The ESQL/C compiler complains about
+unknown EXEC statements (even when they are within comments).
+
+Files in this distribution:
+	Copyright
+	Makefile
+	README
+	Extensions
+	ChangeLog
+	ingmod.ec
+	ingtest.py # a test program
+	:switchexec # patch unknown EXEC statements
+
+For further questions, hints, bug reports, ... please contact:
+
+Holger Meyer, hme@informatik.uni-rostock.de, private: hm@baltic.de
