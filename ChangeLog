@@ -1,3 +1,83 @@
+Fri Apr 23 14:16:11 PDT 2004
+	clach04@ca.com changes
+
+	Added code to set description to an empty list.
+	Changed getsid() code to NOT check sqlcode but to check sid instead
+	I think it is a mistake to check the sqlcode (e.g. try droping a table
+	that does not exist, then inquire_ingres to get the session id and
+	then check the sqlcode, it will have the drop error and not be zero).
+
+Wed Apr 21 12:27:29 PDT 2004
+	clach04@ca.com changes
+
+	Moved: CHECK_OPEN(self);
+	To after debug statements to aid in debugging
+
+Mon Apr 12 13:20:00 PST 2004 - change to version 1.2
+	clach04@ca.com changes
+
+	Added session id to to cursor object
+	This allows multiple sessions to work correctly, previously
+	execute was NOT setting the session id was was using the current
+	(de-)active session. Even for single threaded applications.
+
+	Added a few simple test scripts that deal with multiple sessions.
+
+	Thread-Safe code added (note threadsafety attribute left alone):
+
+		EXEC SQL set connection none;
+        to allow esql/c programs using threads to share DBMS connections.
+
+	Added set session and unset session code around pretty much all
+			EXEC SQL code
+	I was thinking of creating wrapper routine around the original code
+	BUT I decided that it was "nicer" to add the session switching AFTER
+	some of the sanity checks (e.g. no point in setting the session IF
+	the arguments to the function are not passed in correctly). Wrappers
+	would have been neater (and are still possible) but I went with 
+	peppering the source with set/unset code. Note there are more
+	unset session calls due to the need to unset before each return(....) 
+	after errors (wrappers would avoid that).
+
+	Removed oldsid code from close connection code as it didn't work 100%
+	new set session code on all calls should remove the need for this any
+	way
+
+	Minor change to debug output string when debug turned on
+	(verbose->debug)
+
+	Removed INGMOD_DEBUG define from ingmod.ec, this should be set
+	at build time in the makefile/build script.
+
+	Removed debug/version info from test script.
+
+Fri Mar 26 10:21:00 PST 2004
+	clach04@ca.com changes
+
+	Renamed :switchexec to switchexec and modified readme's and makefile
+	:switchexec is not a valid filename under windows.
+
+	Modified Makefile to use OS variables.
+
+	Modified Makefile to pass in (2.5) "-multi" parameter to esqlc
+
+	Created build shell script to feed variables into Makefil, used
+	under RedHat AS 3.0 with Python 2.2.3
+
+	Modified esql/c code to:
+		Export dll symbols so that ingmod can be used under Windows.
+
+		Added ifdefs around snprintf as this isn't easily available
+		under windows, use the less afe sprintf instead.
+
+		Remove "PyObject_HEAD_INIT(&PyType_Type)" inits for datatypes
+		and replaces with (Python Cookbook 2.1) recommended approach
+		of "PyObject_HEAD_INIT(NULL)" followed by init at
+		module/function call time. This was required to build under 
+		Windows (and I believe newer/stricter versions of GNU gcc).
+
+		Add NT build batch file "dll_build.bat".
+
 Mon Jul  7 15:19:40 MEST 2003 Version 1.1
 	hm, incorporate Richard Béneyt's patch:
 

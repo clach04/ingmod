@@ -48,11 +48,23 @@
 EXEC SQL INCLUDE SQLCA;
 EXEC SQL INCLUDE SQLDA;
 
+#ifdef WIN32
+void _declspec(dllexport) initingmod(void);
+/* example py dec from cookbook
+PyObject _declspec(dllexport) *NiGetSpamData(void) */
+#endif /* WIN32 */
 
 /*
 ** configurations
 */
+#ifdef INGMOD_DEBUG
+#undef INGMOD_DEBUG
 #define	INGMOD_DEBUG		1	/**/
+#define cmc_debug_cursorlog()	fprintf (stderr, "\nwin32onlyCMC CHECK_OPEN failed, state = %d, line:%d\n\n", (self)->state, __LINE__)
+#else
+#define	INGMOD_DEBUG		0	/**/
+#define cmc_debug_cursorlog()	
+#endif
 #define	TRUNCATE_CHAR		1	/**/
 #define	CLOSE_ON_NOT_FOUND	1	/**/
 
@@ -74,10 +86,11 @@ EXEC SQL INCLUDE SQLDA;
 
 #define	SQLCODE_NOT_FOUND	100
 
-#define	CHECK_SQLCODE(stmnt, ret)								\
-	if (sqlca.sqlcode < 0) {										\
-		PyErr_SetString(ingmod_OperationalError, error_string(stmnt));	\
-		return(ret);											\
+#define	CHECK_SQLCODE(stmnt, ret)	\
+	if (sqlca.sqlcode < 0) {  \
+		PyErr_SetString(ingmod_OperationalError, error_string(stmnt));  \
+		conn_release_session(); 	\
+		return(ret);  \
 	}
 
 #if !defined(IISQ_HDLR_TYPE)
@@ -149,6 +162,10 @@ static char ingmod_message_text[MAXSTRSIZE] = { '\0' };
 static char ingmod_warning_text[MAXSTRSIZE] = { '\0' };
 EXEC SQL END DECLARE SECTION;
 
+static void conn_release_session(void);
+static int conn_setsid(int);
+
+
 /* eliminate trailing blanks and newlines */
 static
 char *
@@ -194,9 +211,15 @@ error_string(const char *str)
 	EXEC SQL INQUIRE_SQL(:ingmod_error_type = ERRORTYPE);
 	EXEC SQL INQUIRE_SQL(:ingmod_error_text = ERRORTEXT);
 	EXEC SQL INQUIRE_SQL(:ingmod_error_num = ERRORNO);
+        #ifdef WIN32
+	sprintf(buf, "ingmod.error[%s]:%s:%d:%s",
+			str, ingmod_error_type, ingmod_error_num,
+			clear_trail(ingmod_error_text));
+        #else
 	snprintf(buf, (size_t)MAXSTRSIZE, "ingmod.error[%s]:%s:%d:%s",
 			str, ingmod_error_type, ingmod_error_num,
 			clear_trail(ingmod_error_text));
+        #endif /* WIN32 */
 	return(buf);
 }
 
@@ -336,7 +359,7 @@ generic_print(generic_obj *self, FILE *fp, int flags)
 ** DATETIME type
 */
 static PyTypeObject date_type = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyObject_HEAD_INIT(NULL)   /* see http://www.python.org/doc/2.1.3/ext/dnt-basics.html and also initingmod() function */
 	0,						/*ob_size*/
 	"Ingres date/time",			/*tp_name*/
 	sizeof(generic_obj),		/*tp_basicsize*/
@@ -403,8 +426,13 @@ ingmod_timestamp(PyObject *self, PyObject *args)
 	}
 	else {
 		/* with '/' ingres assumes always mm/dd and not dd/mm */
+		#ifdef WIN32
+		sprintf(str, "%02d/%02d/%04d %02d:%02d:%02d",
+				month, day, year, hour, minute, second);
+		#else
 		snprintf(str, MAXSTRSIZE, "%02d/%02d/%04d %02d:%02d:%02d",
 				month, day, year, hour, minute, second);
+		#endif /* WIN32 */
 	}
 	if ((strobj = PyString_FromString(str))) {
 		return(date_new(strobj));
@@ -418,7 +446,7 @@ ingmod_timestamp(PyObject *self, PyObject *args)
 ** BINARY type
 */
 static PyTypeObject binary_type = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyObject_HEAD_INIT(NULL)   /* see http://www.python.org/doc/2.1.3/ext/dnt-basics.html and also initingmod() function */
 	0,						/*ob_size*/
 	"Ingres binary",			/*tp_name*/
 	sizeof(generic_obj),		/*tp_basicsize*/
@@ -672,7 +700,7 @@ handler_getattr(handler_obj *self, char *name)
 static
 PyTypeObject
 handler_type = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyObject_HEAD_INIT(NULL)   /* see http://www.python.org/doc/2.1.3/ext/dnt-basics.html and also initingmod() function */
 	0,						/*ob_size*/
 	"Ingres data handler",		/*tp_name*/
 	sizeof(handler_obj),		/*tp_basicsize*/
@@ -1324,6 +1352,12 @@ static
 PyObject *
 sqlda_description(IISQLDA *sqlda)
 {
+	/*
+	**  Before calling this function, ensure that 
+	**       conn_setsid(self->sid)
+	**  has been called.
+	*/
+
 	IISQLVAR *v;
 	PyObject *list = NULL;
 	PyObject *tuple = NULL;
@@ -1333,12 +1367,18 @@ sqlda_description(IISQLDA *sqlda)
 		fprintf(stderr, "sqlda.description(%p)\n", sqlda);
 	}
 
+	list = PyList_New(0);
+
+	/*
+	** this is no longer a saftey check
+	** return empty lists for null sqlda
+	** so that non select statements
+	** set the description to an empty list
+	*/
 	if (!sqlda) { /* for safety */
-		Py_INCREF(Py_None);
-		return(Py_None);
+		return(list);
 	}
 
-	list = PyList_New(0);
 	for (i = 0, v = sqlda->sqlvar; i < sqlda->sqld; ++i, ++v) {
 		PyObject *name, *type_code, *len, *nullable, *prec, *scale;
 
@@ -1411,6 +1451,7 @@ typedef struct {
 	char			*cname;
 	char			*sname;
 	char			*query;
+	int			sid;
 	int			prefetchrows;
 	int			arraysize;
 	IISQLDA		*in;
@@ -1424,6 +1465,7 @@ staticforward PyTypeObject curs_type;
 #define	CHECK_OPEN(self)										\
 	if ((self)->state <= CLOSED) {								\
 		PyErr_SetString(ingmod_OperationalError, "cursor not open");	\
+cmc_debug_cursorlog();\
 		return(NULL);											\
 	}
 
@@ -1446,12 +1488,13 @@ curs_print(curs_obj *self, FILE *fp, int flags)
 
 static
 curs_obj *
-curs_new()
+curs_new(int sid)
 {
 	curs_obj *n;
 	char buf[128];
 
 	if ((n = PyObject_NEW(curs_obj, &curs_type))) {
+		n->sid = sid;
 		n->query = NULL;
 		sprintf(buf, "C_%p", n);
 		n->cname = strdup(buf);
@@ -1511,8 +1554,10 @@ curs_dealloc(curs_obj *self)
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].dealloc()\n", self);
 	}
+	conn_setsid(self->sid);
 	curs_realclose(self);
 	curs_delete(self);
+	conn_release_session();
 }
 
 static char curs_callproc__doc__[] =
@@ -1536,6 +1581,7 @@ curs_callproc(curs_obj *self, PyObject *args)
 		fprintf(stderr, "cursor[%p].callproc%s\n", self, STR(args));
 	}
 
+	conn_setsid(self->sid);
 	if (self->state >= PREPARED) {
 		/* if cursor already open, may be there are some unfetched tuples */
 		curs_realclose(self);
@@ -1550,18 +1596,21 @@ curs_callproc(curs_obj *self, PyObject *args)
 
 		if (!PyDict_Check(dict)) {
 			PyErr_SetString(PyExc_TypeError, "parameter not a dictionary");
+			conn_release_session();
 			return(NULL);
 		}
 		if ((param = PyDict_Values(dict))) {
 			PyObject *names = PyDict_Keys(dict);
 
 			if (!(self->in = sqlda_input_bind(self->in, param, 0, names))) {
+				conn_release_session();
 				return(NULL);
 			}
 		}
 		else {
 			PyErr_SetString(ingmod_InterfaceError,
 					"cursor.callproc: empty parameter dictionary");
+			conn_release_session();
 			return(NULL);
 		}
 	}
@@ -1584,6 +1633,7 @@ curs_callproc(curs_obj *self, PyObject *args)
 	}
 	CHECK_SQLCODE("EXECUTE PROCEDURE", NULL);
 
+	conn_release_session();
 	/* should return a modified copy of the input sequence */
 	/*
 	return(sqlda_2pyobject(self->in, self->handler));
@@ -1616,6 +1666,8 @@ curs_execute(curs_obj *self, PyObject *args)
 				self, STR(args), STR(param));
 	}
 
+	conn_setsid(self->sid);
+
 	if (self->state >= PREPARED) {
 		/* if cursor already open, may be there are some unfetched tuples */
 		curs_realclose(self);
@@ -1646,9 +1698,11 @@ curs_execute(curs_obj *self, PyObject *args)
 		if (!(self->in = sqlda_alloc())) {
 			PyErr_SetString(ingmod_OperationalError,
 					"cursor.execute: could not alloc input binding");
+			conn_release_session();
 			return(NULL);
 		}
 		if (!(self->in = sqlda_input_bind(self->in, param, nparam, NULL))) {
+			conn_release_session();
 			return(NULL);
 		}
 	}
@@ -1660,6 +1714,7 @@ curs_execute(curs_obj *self, PyObject *args)
 	if (!self->out && !(self->out = sqlda_alloc())) {
 		PyErr_SetString(ingmod_OperationalError,
 				"cursor.execute: could not alloc output binding");
+		conn_release_session();
 		return(NULL);
 	}
 #if defined(INGRES_64)
@@ -1675,6 +1730,7 @@ curs_execute(curs_obj *self, PyObject *args)
 	if (self->out->sqld > self->out->sqln) {
 		PyErr_SetString(ingmod_OperationalError,
 				"cursor.execute: too many rows");
+		conn_release_session();
 		return(NULL);
 	}
 
@@ -1698,6 +1754,9 @@ curs_execute(curs_obj *self, PyObject *args)
 			EXEC SQL EXECUTE :sname;
 		}
 		CHECK_SQLCODE("EXECUTE", NULL);
+		/* clach04: set description to be an empty list */
+		self->descr = sqlda_description(NULL);
+		conn_release_session();
 		Py_INCREF(Py_None);
 		return(Py_None);
 	}
@@ -1717,6 +1776,7 @@ curs_execute(curs_obj *self, PyObject *args)
 	/* bind output parameters */
 	if (!sqlda_output_bind(self->out, self->handler)) {
 		sqlda_free(&self->out);
+		conn_release_session();
 		return(NULL);
 	}
 
@@ -1761,6 +1821,7 @@ curs_execute(curs_obj *self, PyObject *args)
 	CHECK_SQLCODE("OPEN", NULL);
 	self->state = PREPARED;
 	Py_INCREF(Py_None);
+	conn_release_session();
 	return(Py_None);
 }
 
@@ -1777,11 +1838,13 @@ curs_executemany(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_executemany__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].executemany%s\n", self, STR(args));
 	}
+
+	CHECK_OPEN(self);
+
 	/* Execute the same statement several times.
 	** This methods assumes, that optimisation is
 	** done by the subsequently called method
@@ -1811,6 +1874,11 @@ static
 int
 curs_realclose(curs_obj *self)
 {
+	/*
+	**  Before calling this function, ensure that 
+	**       conn_setsid(self->sid)
+	**  has been called.
+	*/
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].realclose()\n", self);
 	}
@@ -1840,13 +1908,27 @@ curs_close(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_close__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].close()\n", self);
 	}
+
+	/*
+	** clach04
+	** I'd rather that the check below is REMOVED
+	** because the cursor may already be closed (due to fetchall() which
+	** performs an implicit closereal())
+	** the DBI spec doesn't have anything to say on this but dumping an
+	** and error and raising an exception that the cursor is already 
+	** closed on a close attempt isn't helpful or Python-like
+	** keeping it as-is for the time being.
+	*/
+	CHECK_OPEN(self);
+
+	conn_setsid(self->sid);
 	curs_realclose(self); /* may set sqlca.sqlcode */
 	CHECK_SQLCODE("CLOSE", NULL);
+	conn_release_session();
 	Py_INCREF(Py_None);
 	return(Py_None);
 }
@@ -1866,11 +1948,15 @@ curs_fetchone(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_fetchone__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
+
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].fetchone()\n", self);
 	}
+
+	CHECK_OPEN(self);
+
+	conn_setsid(self->sid);
 
 	cname = self->cname;
 	sname = self->sname;
@@ -1893,12 +1979,15 @@ curs_fetchone(curs_obj *self, PyObject *args)
 			curs_realclose(self);
 #endif
 			Py_INCREF(Py_None);
+			conn_release_session();
 			return(Py_None);
 		}
 		PyErr_SetString(ingmod_OperationalError, error_string("FETCH"));
 		curs_realclose(self);
+		conn_release_session();
 		return(NULL);
 	}
+	conn_release_session();
 	return(sqlda_2pyobject(self->out, self->handler));
 }
 
@@ -1914,10 +2003,13 @@ curs_fetchmany(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_fetchmany__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
+
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].fetchmany(%d)\n", self, arraysize);
 	}
+
+	CHECK_OPEN(self);
+
 	PyErr_SetString(ingmod_NotSupportedError, "not implemented yet");
 	return(NULL);
 }
@@ -1932,11 +2024,13 @@ curs_fetchall(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_fetchall__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].fetchall()\n", self);
 	}
+
+	CHECK_OPEN(self);
+
 	PyErr_SetString(ingmod_NotSupportedError, "not implemented yet");
 	return(NULL);
 }
@@ -1951,11 +2045,12 @@ curs_nextset(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_nextset__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].nextset()\n", self);
 	}
+	CHECK_OPEN(self);
+
 	PyErr_SetString(ingmod_NotSupportedError, "not implemented yet");
 	return(NULL);
 }
@@ -1970,11 +2065,12 @@ curs_setinputsizes(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_setinputsizes__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].setinputsizes%s\n", self, STR(args));
 	}
+	CHECK_OPEN(self);
+
 	PyErr_SetString(ingmod_NotSupportedError, "not implemented yet");
 	return(NULL);
 }
@@ -1989,11 +2085,12 @@ curs_setoutputsize(curs_obj *self, PyObject *args)
 		PyErr_SetString(ingmod_InterfaceError, curs_setoutputsize__doc__);
 		return(NULL);
 	}
-	CHECK_OPEN(self);
 
 	if (ingmod_debug) {
 		fprintf(stderr, "cursor[%p].setoutputsize%s\n", self, STR(args));
 	}
+	CHECK_OPEN(self);
+
 	PyErr_SetString(ingmod_NotSupportedError, "not implemented yet");
 	return(NULL);
 }
@@ -2063,6 +2160,7 @@ curs_names(curs_obj *self)
 	}
 	CHECK_OPEN(self);
 
+	conn_setsid(self->sid);
 	tuple = PyTuple_New(self->out->sqld);
 	for (i = 0, v = self->out->sqlvar; i < self->out->sqld; ++i, ++v) {
 		PyObject *field = PyString_FromStringAndSize(
@@ -2071,10 +2169,12 @@ curs_names(curs_obj *self)
 			Py_DECREF(tuple);
 			PyErr_SetString(ingmod_InternalError,
 					"cursor.names: build value failed");
+			conn_release_session();
 			return(NULL);
 		}
 		PyTuple_SetItem(tuple, i, field);
 	}
+	conn_release_session();
 	return(tuple);
 }
 
@@ -2091,6 +2191,7 @@ curs_lens(curs_obj *self)
 	}
 	CHECK_OPEN(self);
 
+	conn_setsid(self->sid);
 	tuple = PyTuple_New(self->out->sqld);
 	for (i = 0, v = self->out->sqlvar; i < self->out->sqld; ++i, ++v) {
 		PyObject *field = PyInt_FromLong((long)v->sqllen);
@@ -2098,10 +2199,12 @@ curs_lens(curs_obj *self)
 			Py_DECREF(tuple);
 			PyErr_SetString(ingmod_InternalError,
 					"cursor.lens: build value failed");
+			conn_release_session();
 			return(NULL);
 		}
 		PyTuple_SetItem(tuple, i, field);
 	}
+	conn_release_session();
 	return(tuple);
 }
 
@@ -2118,16 +2221,19 @@ curs_ingtypes(curs_obj *self)
 	}
 	CHECK_OPEN(self);
 
+	conn_setsid(self->sid);
 	tuple = PyTuple_New(self->out->sqld);
 	for (i = 0, v = self->out->sqlvar; i < self->out->sqld; ++i, ++v) {
 		PyObject *field = PyInt_FromLong((long)v->sqltype);
 		if (field == NULL) {
 			Py_DECREF(tuple);
 			PyErr_SetString(ingmod_InternalError, "cursor.ingtypes: build value failed");
+			conn_release_session();
 			return(NULL);
 		}
 		PyTuple_SetItem(tuple, i, field);
 	}
+	conn_release_session();
 	return(tuple);
 }
 
@@ -2184,13 +2290,17 @@ curs_getattr(curs_obj *self, char *name)
 		return(PyInt_FromLong((long)self->prefetchrows));
 	}
 	else if (strcmp(name, "dbevent") == 0) {
+		conn_setsid(self->sid);
 		EXEC SQL INQUIRE_SQL(:event = DBEVENTNAME, :text = DBEVENTTEXT);
+		conn_release_session();
 		return(Py_BuildValue("(ss)", clear_trail(name), clear_trail(text)));
 	}
 	else if (strcmp(name, "description") == 0) {
 		if (self->out) {
 			if (!self->descr) {
+				conn_setsid(self->sid);
 				self->descr = sqlda_description(self->out);
+				conn_release_session();
 			}
 			if (self->descr) {
 				Py_INCREF(self->descr);
@@ -2207,7 +2317,9 @@ curs_getattr(curs_obj *self, char *name)
 		return(PyInt_FromLong((long)sqlca.sqlcode));
 	}
 	else if (strcmp(name, "sqlerror") == 0) {
+		conn_setsid(self->sid);
 		EXEC SQL INQUIRE_SQL(:msg = ERRORTEXT);
+		conn_release_session();
 		return(PyString_FromString(clear_trail(msg)));
 	}
 #if !defined(INGRES_64)
@@ -2277,7 +2389,7 @@ curs_setattr(curs_obj *self, char *name, PyObject *value)
 }
 
 static PyTypeObject curs_type = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyObject_HEAD_INIT(NULL)   /* see http://www.python.org/doc/2.1.3/ext/dnt-basics.html and also initingmod() function */
 	0,						/*ob_size*/
 	"Ingres cursor",			/*tp_name*/
 	sizeof(curs_obj),			/*tp_basicsize*/
@@ -2393,7 +2505,13 @@ conn_getsid()
 	EXEC SQL END DECLARE SECTION;
 
 	EXEC SQL INQUIRE_SQL(:sid = SESSION);
-	if (sqlca.sqlcode < 0) {
+	/*
+	** clach04
+	** I think we should check the sid here not the sqlda.sqlcode
+	** e.g. drop a table that does not exist, then inquire ingres the sid
+	** you get the drop error no such table error returned!
+	*/
+	if (sid < 0) {
 		fprintf(stderr, "connection.getsid: failed.\n");
 		return(-1);
 	}
@@ -2416,10 +2534,40 @@ EXEC SQL END DECLARE SECTION;
 	if (ingmod_debug) {
 		fprintf(stderr, "connection.setsid(%d)\n", sid);
 	}
+	/* zero return possible under _certain_ circumstances */
 	if (current_sid != sid) {
 		EXEC SQL SET_SQL(SESSION = :sid);
 	}
 	return(sqlca.sqlcode);
+}
+
+/*
+** Release a DBMS connection so that other threads can use it
+** this does NOT close the DBMS session, just releases the thread
+** "lock" so that other threads can switch to it.
+*/
+static
+void
+conn_release_session(void)
+{
+	int current_sid = conn_getsid();
+
+	if (ingmod_debug) {
+		fprintf(stderr, "connection.release_session(%d)\n", current_sid);
+	}
+
+	/* Without this get
+E_LQ00C9 Attempt to switch to a session which is currently active.
+ when setting the session id (numeric not string)
+ followed by
+E_LQ002E The 'prepare' query has been issued outside of a DBMS session.
+
+on selects, etc.
+	*/
+	/* set connection NAME is Ingres 2.0 (maybe 1.x) and later */
+	/* none is new for 2.5 and means NONE */
+	/* passing in none to 2.0 has no effect, i.e. sessions stays the same */
+	EXEC SQL set connection none;
 }
 
 static
@@ -2429,6 +2577,7 @@ conn_disconnect(int sid)
 	EXEC SQL BEGIN DECLARE SECTION;
 		int nocommit;
 	EXEC SQL END DECLARE SECTION;
+		int return_value=0;
 
 	if (ingmod_debug) {
 		fprintf(stderr, "connection.disconnect(sid=%d)\n", sid);
@@ -2448,7 +2597,12 @@ conn_disconnect(int sid)
 		}
 	}
 	EXEC SQL DISCONNECT;
-	return(sqlca.sqlcode);
+	return_value=sqlca.sqlcode;
+	/*
+	** probably over kill but release anyway
+	*/
+	conn_release_session();
+	return(return_value);
 }
 
 
@@ -2458,8 +2612,6 @@ static
 PyObject *
 conn_close(conn_obj *self, PyObject *args)
 {
-	int oldsid;
-
 	if (!PyArg_ParseTuple(args, "")) {
 		PyErr_SetString(ingmod_InterfaceError, conn_close__doc__);
 		return(NULL);
@@ -2467,14 +2619,8 @@ conn_close(conn_obj *self, PyObject *args)
 	if (ingmod_debug) {
 		fprintf(stderr, "connection[%d].close()\n", self->sid);
 	}
-	oldsid = conn_getsid();
 	conn_disconnect(self->sid);
 	CHECK_SQLCODE("DISCONNECT", NULL);
-	if (self->sid != oldsid) {
-		if (conn_setsid(oldsid)) {
-			return(PyInt_FromLong((long)sqlca.sqlcode));
-		}
-	}
 	self->sid = -1;
 	self->state = NOTCONNECTED;
 	Py_INCREF(Py_None);
@@ -2498,6 +2644,7 @@ conn_commit(conn_obj *self, PyObject *args)
 	EXEC SQL COMMIT;
 	CHECK_SQLCODE("COMMIT", NULL);
 	Py_INCREF(Py_None);
+	conn_release_session();
 	return(Py_None);
 }
 
@@ -2518,6 +2665,7 @@ conn_rollback(conn_obj *self, PyObject *args)
 	EXEC SQL ROLLBACK;
 	CHECK_SQLCODE("ROLLBACK", NULL);
 	Py_INCREF(Py_None);
+	conn_release_session();
 	return(Py_None);
 }
 
@@ -2539,11 +2687,13 @@ conn_immediate(conn_obj *self, PyObject *args)
 	if (ingmod_debug) {
 		fprintf(stderr, "connection.immediate%s\n", STR(args));
 	}
+	conn_setsid(self->sid);
 	if (param) {
 		IISQLDA *sqlda = NULL;
 
 		int nparam = count_chr(query, '?');
 		if (!(sqlda = sqlda_input_bind(sqlda, param, nparam, NULL))) {
+			conn_release_session();
 			return(NULL);
 		}
 		EXEC SQL EXECUTE IMMEDIATE :query USING DESCRIPTOR :sqlda;
@@ -2554,6 +2704,7 @@ conn_immediate(conn_obj *self, PyObject *args)
 		EXEC SQL EXECUTE IMMEDIATE :query;
 		CHECK_SQLCODE("IMMEDIATE", NULL);
 	}
+	conn_release_session();
 	Py_INCREF(Py_None);
 	return(Py_None);
 }
@@ -2578,7 +2729,7 @@ conn_cursor(conn_obj *self, PyObject *args)
 				"max # of cursors per session reached");
 		return(NULL);
 	}
-	if ((newcurs = curs_new())) {
+	if ((newcurs = curs_new(self->sid))) {
 		self->curs[self->cnum++] = newcurs;
 		/* reference to the connection object */
 		newcurs->conn = (PyObject *)self;
@@ -2610,7 +2761,7 @@ conn_getattr(conn_obj *self, char *name)
 }
 
 static PyTypeObject conn_type = {
-	PyObject_HEAD_INIT(&PyType_Type)
+	PyObject_HEAD_INIT(NULL)   /* see http://www.python.org/doc/2.1.3/ext/dnt-basics.html and also initingmod() function */
 	0,						/*ob_size*/
 	"Ingres connction",			/*tp_name*/
 	sizeof(conn_obj),			/*tp_basicsize*/
@@ -2686,6 +2837,7 @@ ingmod_connect(PyObject *self, PyObject *args)
 		/* make this session the current */
 		conn_setsid(sid);
 	}
+	conn_release_session();
 	return((PyObject *)newconn);
 }
 
@@ -2700,7 +2852,7 @@ ingmod_getsetdebug(PyObject *self, PyObject *args)
 	if (PyArg_ParseTuple(args, "|i", &on)) {
 		ingmod_debug = on;
 	}
-	fprintf(stderr, "ingmod.verbose = %d\n", ingmod_debug);
+	fprintf(stderr, "ingmod.debug = %d\n", ingmod_debug);
 	return(PyInt_FromLong(ingmod_debug));
 #else
 	PyErr_SetString(ingmod_InterfaceError, "not compiled with debug option");
@@ -2754,6 +2906,36 @@ static PyMethodDef ingmod_methods[] = {
 void
 initingmod()
 {
+	/*
+	** clach04 compile problems under win32 require change to object definition/initialisation
+	**
+    	** From :
+	** http://mail.python.org/pipermail/python-announce-list/1999-July/000101.html 
+	** section 3.24. "Initializer not a constant" while building DLL on MS-Windows
+    	**
+	** http://www.python.org/doc/2.1.3/ext/dnt-basics.html
+	**
+    	** http://www.python.org/doc/1.6/ext/win-cookbook.html
+	** 
+	** Want to set object type in init code for object/class
+	** 
+	** From:
+	** http://www.python.org/doc/current/ext/dnt-basics.html
+	** 
+	** Want to set object type with function call too:
+	**        PyType_Ready()
+	** 
+	** 
+	** Note quite sure which advice to follow so following OLD python 
+	** version advice (as PyType_Ready() appears to be for new versions)
+	*/
+        #define ingmod_init_type(X) X.ob_type = &PyType_Type
+        ingmod_init_type(date_type);
+        ingmod_init_type(binary_type);
+        ingmod_init_type(handler_type);
+        ingmod_init_type(curs_type);
+        ingmod_init_type(conn_type);
+        
 	if (!(ingmod_module = Py_InitModule4("ingmod", ingmod_methods, iingmod_module_doc,
 			(PyObject*)NULL, PYTHON_API_VERSION))) {
 		Py_FatalError("can not init ingmod module");
@@ -2788,7 +2970,7 @@ initingmod()
 		Py_FatalError("can not add "#obj" object to ingmod dictionary");		\
 	}
 
-	NEW_OBJECT(version, PyString_FromString("1.1 (C) hm@baltic.de"));
+	NEW_OBJECT(version, PyString_FromString("1.2 (C) hm@baltic.de"));
 	NEW_OBJECT(apilevel, PyString_FromString("2.0"));
 	NEW_OBJECT(threadsafety, PyInt_FromLong(0L));
 	NEW_OBJECT(paramstyle, PyString_FromString("qmark"));
@@ -2824,7 +3006,7 @@ initingmod()
 	EXEC SQL SET_SQL(MESSAGEHANDLER = message_handler);
 
 	if (INGMOD_DEBUG) {
-		fprintf(stderr, "ingmod version %s: level=%s, style='%s', thread=%s\n",
+		fprintf(stderr, "ingmod version %s: level=%s, style='%s', thread=%s, built with DEBUG available\n",
 				STR(ingmod_version),
 				STR(ingmod_apilevel),
 				STR(ingmod_paramstyle),

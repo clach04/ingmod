@@ -41,8 +41,8 @@ class datahandler:
 	def data(self):
 		return self._str
 
-ingmod.debug(0)
-ingmod.verbose(0)
+#ingmod.debug(0)
+#ingmod.verbose(0)
 print dir(ingmod)
 cn1 = ingmod.connect(DB)
 print cn1.__doc__, dir(cn1)
@@ -81,8 +81,8 @@ print "rowcount =", cu.rowcount, "arraysize =", cu.arraysize
 while t:
 	print t
 	t = cu.fetchone()
-ingmod.debug(1)
-ingmod.verbose(1)
+#ingmod.debug(1)
+#ingmod.verbose(1)
 cu.execute("select * from iiattribute where attrelid = ?", (33, ))
 print "rowcount =", cu.rowcount, "arraysize =", cu.arraysize
 for t in cu.description:

@@ -1,24 +1,29 @@
-II_SYSTEM = /users/db10
-#PYTHONHOME = /opt/FINpython
-PYTHONHOME = $(HOME)
-PYTHON = python2.2
+#II_SYSTEM = $(II_SYSTEM)
+PYTHONHOME = $(zope_PYTHONHOME)
+
+# PYTHON_VER = python2.1
+PYTHON_VER = $(zope_PYTHON_VER)
+
+PYTHON = $(zope_PYTHON_EXE)
 ESQL = $(II_SYSTEM)/ingres/bin/esqlc
 ESQLLIBS = -lingres
-#ESQLFLAGS = -p -wsql=entry_SQL92 -prototypes	# Ingres II
-#ESQLFLAGS = -p -wsql=open -prototypes	# Ingres II
-ESQLFLAGS = -p -wopen	# Ingres 6.4, OpenIngres 1.2
+#ESQLFLAGS = -multi -p -wsql=entry_SQL92 -prototypes	# Ingres II
+ESQLFLAGS = -multi -p -wsql=open -prototypes	# Ingres II
+#ESQLFLAGS = -p -wopen	# Ingres 6.4, OpenIngres 1.2
 
+INGMOD_DEBUG_FLAGS = -DINGMOD_DEBUG
+INGMOD_DEBUG_FLAGS =
 WARN = #-Wall
 WARN = -v
-CFLAGS = $(WARN) -O -I $(PYTHONHOME)/include/$(PYTHON)
+CFLAGS = $(WARN) -O -I $(PYTHONHOME)/include/$(PYTHON_VER) $(INGMOD_DEBUG_FLAGS)
 LIBS = $(ESQLLIBS) -lnsl -lm
 LDFLAGS = -L$(II_SYSTEM)/ingres/lib
 
-#LDSO = $(CC) -shared # on linux
+LDSO = $(CC) -shared # on linux
 #LDSO = $(CC) -G -B dynamic # on solaris
-LDSO = $(CC) -G -B dynamic
+#LDSO = $(CC) -G -B dynamic
 
-DIST = Copyright Makefile README Extensions ChangeLog ingmod.ec ingtest.py :switchexec
+DIST = Copyright Makefile README Extensions ChangeLog ingmod.ec ingtest.py switchexec
 DISTFILE = ingmod.tar
 
 
